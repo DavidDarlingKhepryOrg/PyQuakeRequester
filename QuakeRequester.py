@@ -32,7 +32,7 @@ arg_parser.add_argument('--end_date',
                         help='ending date')
 arg_parser.add_argument('--iteration_type',
                         type=str,
-                        default='months',
+                        default='weeks',
                         choices=('days', 'weeks', 'months', 'years'),
                         help='iteration type (e.g. days, weeks, months, years)')
 arg_parser.add_argument('--how_many_iterations',
@@ -178,6 +178,7 @@ with io.open(tgt_file_name, 'w', newline='') as tgt_file:
                     first_pass = False
             else:
                 if content_decoded[content_decoded.find('\n') + 1:].strip() != '':
+                    # TODO: Add logic to switch from 'months' to weeks when the row_count exceeds 10,000
                     tgt_file.write(content_decoded[content_decoded.find('\n') + 1:].strip() + '\n')
                     tgt_file.flush()
         except Exception as e:
