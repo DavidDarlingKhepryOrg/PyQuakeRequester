@@ -32,7 +32,7 @@ arg_parser.add_argument('--end_date',
                         help='ending date')
 arg_parser.add_argument('--iteration_type',
                         type=str,
-                        default='weeks',
+                        default='years',
                         choices=('days', 'weeks', 'months', 'years'),
                         help='iteration type (e.g. days, weeks, months, years)')
 arg_parser.add_argument('--how_many_iterations',
@@ -96,46 +96,45 @@ arg_parser.add_argument('--tgt_col_quotechar',
 
 args = arg_parser.parse_args()
 
+max_rows_per_query = 20000
 
-def get_next_dates_list(bgn_date_parm,
-                        end_date_parm,
-                        iteration_type,
-                        how_many_iterations):
-    iteration = 0
-    bgn_end_dates_list = []
-    date_time = bgn_date_parm
-    while date_time <= end_date:
-        iteration += 1
-        # print('date_time: %s, end_date: %s, max_date: %s, how_many_iterations: %s, iteration: %s, iteration_type: %s' % (date_time, end_date, max_date, iteration, how_many_iterations, iteration_type))
-        if how_many_iterations == 0 or iteration <= how_many_iterations:
-            bgn_date_parm = date_time.strftime('%Y-%m-%d')
-            try:
-                if iteration_type == 'days':
-                    date_time += timedelta(days=1)
-                    max_date = (date_time + timedelta(days=1)).strftime('%Y-%m-%d')
-                elif iteration_type == 'weeks':
-                    date_time += timedelta(weeks=1)
-                    max_date = date_time.strftime('%Y-%m-%d')
-                elif iteration_type == 'months':
-                    date_time += monthdelta(months=1)
-                    max_date = date_time.strftime('%Y-%m-%d')
-                elif iteration_type == 'years':
-                    date_time += monthdelta(months=12)
-                    max_date = date_time.strftime('%Y-%m-%d')
-                else:
-                    date_time += timedelta(days=1)
-                    max_date = (date_time + timedelta(days=1)).strftime('%Y-%m-%d')
-                print('bgn_date: %s, max_date: %s' % (bgn_date_parm, max_date))
-                if datetime.strptime(max_date, '%Y-%m-%d') < end_date:
-                    bgn_end_dates_list.append((bgn_date_parm, max_date))
-                else:
-                    bgn_end_dates_list.append((bgn_date_parm, max_date))
-                    break
-            except Exception as e:
-                sys.stderr.write('Exception: %s' % e)
+prev_query_row_count = None
+
+
+def get_next_smaller_iteration_type(interval):
+    if interval == 'years':
+        interval = 'months'
+    elif interval == 'months':
+        interval = 'weeks'
+    elif interval == 'weeks':
+        interval = 'days'
+    return interval
+
+
+def get_next_end_date(cur_date_parm,
+                      iteration_type_parm):
+    date_time = cur_date_parm
+    next_end_date = None
+    try:
+        if iteration_type_parm == 'days':
+            date_time += timedelta(days=1)
+            next_end_date = date_time
+        elif iteration_type_parm == 'weeks':
+            date_time += timedelta(weeks=1)
+            next_end_date = date_time
+        elif iteration_type_parm == 'months':
+            date_time += monthdelta(months=1)
+            next_end_date = date_time
+        elif iteration_type_parm == 'years':
+            date_time += monthdelta(months=12)
+            next_end_date = date_time
         else:
-            break;
-    return bgn_end_dates_list
+            date_time += timedelta(days=1)
+            next_end_date = (date_time + timedelta(days=1))
+    except Exception as e:
+        sys.stderr.write('Exception: %s' % e)
+
+    return next_end_date
 
 
 if args.tgt_path.startswith('~'):
@@ -157,30 +156,35 @@ with io.open(tgt_file_name, 'w', newline='') as tgt_file:
 
     bgn_date = datetime.strptime(args.bgn_date, '%Y-%m-%d')
     end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
-    bgn_end_dates = get_next_dates_list(bgn_date,
-                                        end_date,
-                                        args.iteration_type,
-                                        args.how_many_iterations)
 
-    # pprint(bgn_end_dates)
-
-    for bgn_end_date in bgn_end_dates:
-        url = '%s&starttime=%s&endtime=%s' % (base_url, bgn_end_date[0], bgn_end_date[1])
+    cur_bgn_date = bgn_date
+    iteration_type = args.iteration_type
+    while cur_bgn_date <= end_date:
+        end_date_parm = get_next_end_date(cur_bgn_date, iteration_type)
+        end_date_parm -= timedelta(days=1)
+        url = '%s&starttime=%s&endtime=%s' % (base_url, cur_bgn_date.strftime('%Y-%m-%d'), end_date_parm.strftime('%Y-%m-%d'))
         print(url)
         try:
             response = requests.get(url)
-            content_decoded = response.content.decode('utf-8')
-            print(content_decoded)
-            if first_pass:
-                if content_decoded.strip() != '':
-                    tgt_file.write(content_decoded.strip() + '\n')
-                    tgt_file.flush()
-                    first_pass = False
+            if response.ok:
+                content_decoded = response.content.decode('utf-8')
+                print(content_decoded)
+                if first_pass:
+                    if content_decoded.strip() != '':
+                        tgt_file.write(content_decoded.strip() + '\n')
+                        tgt_file.flush()
+                        first_pass = False
+                else:
+                    if content_decoded[content_decoded.find('\n') + 1:].strip() != '':
+                        # TODO: Add logic to switch from 'months' to weeks when the row_count exceeds half of max_query_rows
+                        prev_query_row_count = content_decoded.count('\n')
+                        tgt_file.write(content_decoded[content_decoded.find('\n') + 1:].strip() + '\n')
+                        tgt_file.flush()
+                cur_bgn_date = end_date_parm + timedelta(days=1)
             else:
-                if content_decoded[content_decoded.find('\n') + 1:].strip() != '':
-                    # TODO: Add logic to switch from 'months' to weeks when the row_count exceeds 10,000
-                    tgt_file.write(content_decoded[content_decoded.find('\n') + 1:].strip() + '\n')
-                    tgt_file.flush()
+                if response.content.decode('utf-8').find('matching events exceeds search limit') > -1:
+                    iteration_type = get_next_smaller_iteration_type(iteration_type)
+
         except Exception as e:
             print('Bad response. Got an error code:', e)
 
